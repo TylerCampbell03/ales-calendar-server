@@ -149,7 +149,7 @@ app.get('/api/health', (req, res) => {
 
 // 8. Add scheduled event notification
 app.post('/api/schedule-event', (req, res) => {
-  const { eventId, title, category, eventDate, notifTime, notifDays, notifUrgency } = req.body;
+  const { eventId, title, category, eventDate, notifTime, notifDays, notifUrgency, timezoneOffset } = req.body;
   
   if (!eventId || !eventDate) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -163,6 +163,7 @@ app.post('/api/schedule-event', (req, res) => {
     notifTime,
     notifDays,
     notifUrgency,
+    timezoneOffset,
     createdAt: new Date()
   });
 
@@ -199,7 +200,11 @@ setInterval(() => {
 
   scheduledEvents.forEach((event, eventId) => {
     try {
-      // Parse event date
+      // Adjust to client's timezone (offset in minutes; Date.getTimezoneOffset is minutes behind UTC)
+      const tzOffset = event.timezoneOffset ?? 0;
+      const clientNow = new Date(now.getTime() - tzOffset * 60_000);
+
+      // Parse event date (assumed local to client)
       const [year, month, day] = event.eventDate.split('-').map(Number);
       const eventDate = new Date(year, month - 1, day);
       
@@ -207,28 +212,29 @@ setInterval(() => {
       const notifDate = new Date(eventDate);
       notifDate.setDate(notifDate.getDate() - (event.notifDays || 0));
       
-      // Check if today is the notification day
+      // Check if today is the notification day in client's local time
       const isNotifDay = 
-        now.getFullYear() === notifDate.getFullYear() &&
-        now.getMonth() === notifDate.getMonth() &&
-        now.getDate() === notifDate.getDate();
+        clientNow.getFullYear() === notifDate.getFullYear() &&
+        clientNow.getMonth() === notifDate.getMonth() &&
+        clientNow.getDate() === notifDate.getDate();
       
       if (!isNotifDay) return;
       
-      // Check if time matches (if specified)
+      // Check if time matches (if specified) using client's local time
       if (event.notifTime) {
         const [hours, minutes] = event.notifTime.split(':').map(Number);
-        const isRightTime = now.getHours() === hours && now.getMinutes() === minutes;
+        const isRightTime = clientNow.getHours() === hours && clientNow.getMinutes() === minutes;
         if (!isRightTime) return;
       }
       
-      // Rate limit: send only once per day
-      const key = `${eventId}_${ymd(now)}`;
+      // Rate limit: send only once per client day
+      const key = `${eventId}_${ymd(clientNow)}`;
       if (sentToday.has(key)) return;
       sentToday.add(key);
       
-      // Calculate days until event
-      const daysUntil = Math.floor((eventDate - now) / (1000 * 60 * 60 * 24));
+      // Calculate days until event in client's local date
+      const startOfTodayClient = new Date(clientNow.getFullYear(), clientNow.getMonth(), clientNow.getDate());
+      const daysUntil = Math.floor((eventDate - startOfTodayClient) / (1000 * 60 * 60 * 24));
       
       // Prepare notification
       const categoryEmojis = { work: '💼', school: '📚', personal: '💝' };
